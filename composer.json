@@ -1,0 +1,41 @@
+{
+    "name": "multidanze/phalcon-facebook",
+    "description": "Phalcon Facebook Module.",
+    "type": "library",
+    "keywords" : [
+        "phalcon",
+        "phalcon facebook"
+    ],
+    "support": {
+        "issues": "https://github.com/multidanze/phalcon-facebook/issues"
+    },
+    "minimum-stability": "stable",
+    "homepage" : "https://github.com/multidanze/phalcon-facebook",
+    "license" : "MIT",
+    "authors" : [{
+        "name": "multidanze",
+        "email": "multidanze@gmail.com",
+        "homepage": "http://easydot.gr",
+        "role": "Developer"
+    }],
+
+    "autoload": {
+        "psr-4": {
+            "Multidanze\\Facebook\\": "src/"
+        }
+    },
+
+    "require": {
+        "php": ">=5.4.0",
+        "facebook/graph-sdk" : "~5.0"
+    },
+    "require-dev": {
+        "phalcon/devtools": "~2.0"
+    },
+
+    "extra": {
+        "branch-alias": {
+            "dev-master": "1.*-dev"
+        }
+    }
+}
