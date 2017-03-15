@@ -49,7 +49,7 @@ class Facebook
      *
      * @param array $config
      */
-    public function __construct($config, $session)
+    public function __construct($config, $session = null)
     {
         if (!$config->app_id || !$config->app_secret || $config->app_id == 'app_id_here' || $config->app_secret == 'app_secret_here') {
             throw new \RuntimeException('You need an app id and secret keys. Get one from <a href="https://developers.facebook.com/">developers.facebook.com</a>');
@@ -58,7 +58,7 @@ class Facebook
         $this->app_id = $config->app_id;
         $this->app_secret = $config->app_secret;
         $this->default_graph_version = $config->default_graph_version;
-        $this->permissions = $config->permissions->toArray();
+        $this->permissions = $config->permissions;
         $this->token = $config->access_token;
         $this->session = $session;
 
@@ -105,7 +105,7 @@ class Facebook
         if (isset($accessToken)) {
             // Logged in!
             $this->session->set('fb_access_token', (string) $accessToken);
-            return true;
+            return $accessToken;
         } else {
             return false;
         }
@@ -133,7 +133,7 @@ class Facebook
         $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
         try {
             // Returns a `Facebook\FacebookResponse` object
-            $response = $this->facebook->get('/me?fields=accounts', $token);
+            $response = $this->facebook->get('/me/accounts', $token);
         } catch(Facebook\Exceptions\FacebookResponseException $e) {
             echo 'Graph returned an error: ' . $e->getMessage();
             exit;
@@ -141,8 +141,8 @@ class Facebook
             echo 'Facebook SDK returned an error: ' . $e->getMessage();
             exit;
         }
-        $graphObject = $response->getDecodedBody();
-        return $graphObject['accounts'];
+        $graphEdge = $response->getGraphEdge();//getDecodedBody();
+        return $graphEdge;//->getField('accounts');
     }
 
     public function checkLogin()
@@ -151,11 +151,14 @@ class Facebook
         try {
             // Returns a `Facebook\FacebookResponse` object
             $response = $this->facebook->get('/me', $token);
-        } catch(Facebook\Exceptions\FacebookResponseException $e) {
+        } catch(\Exception $e) {
+            return false;
+        }
+        /*catch(Facebook\Exceptions\FacebookResponseException $e) {
             return false;
         } catch(Facebook\Exceptions\FacebookSDKException $e) {
             return false;
-        }
+        }*/
 
         return $response;
     }
@@ -172,13 +175,14 @@ class Facebook
      *
     */
 
-    public function getPostsFromPage($page_id, $token = null)
+
+    public function getPostsFromPage($page_id, $limit = 100, $token = null)
     {
         if ($token == null) {
             $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
         }
 
-        $response = $this->facebook->get('/'.$page_id.'/posts?fields=id,message,link,full_picture', $token);
+        $response = $this->facebook->get('/'.$page_id.'/posts?fields=id,message,link,full_picture,created_time&limit=' . $limit, $token);
         $graphEdge = $response->getGraphEdge();
         $result = array();
         foreach($graphEdge as $graphNode) {
@@ -186,7 +190,10 @@ class Facebook
             $post['id'] = $graphNode->getField('id');
             $post['message'] = $graphNode->getField('message');
             $post['link'] = $graphNode->getField('link');
+            $post['post_link'] = 'https://www.facebook.com/' . str_replace('_', '/posts/', $graphNode->getField('id'));
             $post['picture'] = $graphNode->getField('full_picture');
+            $created_time = $graphNode->getField('created_time');
+            $post['created_time'] = $created_time->format('d/m/Y H:i:s');
             $result[] = $post;
         }
         return $result;
@@ -232,15 +239,26 @@ class Facebook
         return $result;
     }
 
+    public function getPageToken($page_id, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+
+        $response = $this->facebook->get('/'.$page_id.'?fields=access_token', $token);
+        $graphNode = $response->getGraphNode();
+        return $graphNode->getField('access_token');
+    }
+
     /*
         Writing functions
         post($message, $link = '') -> Write a post
         NB: The publish_pages permission is required for this function
     */
-    public function postToPage($page_id, $message, $token = null, $link = '')
+    public function postToPage($page_id, $message, $link = '', $token = null)
     {
         if ($token == null) {
-            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+            $token = $this->getPageToken($page_id);
         }
 
         $data = [
@@ -278,4 +296,164 @@ class Facebook
         ];
         $this->facebook->post('/'.$post_id.'/comments', $data, $token);
     }
+
+
+
+
+
+
+    public function getAlbumsFromPage($page_id, $limit = 100, $paging = null, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+        if ($paging['page']) {
+            $paging = '&' . $paging['dir'] . '=' . $paging['page'];
+        } else {
+            $paging = '';
+        }
+
+        $response = $this->facebook->get('/'.$page_id.'/albums?limit=' . $limit . $paging, $token);
+        $body = $response->getDecodedBody();
+        $graphEdge = $response->getGraphEdge();
+        $result = array();
+        $result['paging'] = array('next' => $body['paging']['cursors']['after'], 'prev' => $body['paging']['cursors']['before']);
+        foreach($graphEdge as $graphNode) {
+            $post = array();
+            $post['id'] = $graphNode->getField('id');
+            $post['name'] = $graphNode->getField('name');
+            $post['link'] = 'https://www.facebook.com/' . str_replace('_', '/posts/', $graphNode->getField('id'));
+            $post['picture'] = $this->getCoverPhotoFromAlbum($graphNode->getField('id'));
+            $post['description'] = $this->getAlbumInfo($graphNode->getField('id'));
+            $created_time = $graphNode->getField('created_time');
+            $post['created_time'] = $created_time->format('d/m/Y H:i:s');
+            $result['albums'][] = $post;
+        }
+        return $result;
+    }
+
+    public function getAlbumInfo($album_id, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+
+        $response = $this->facebook->get('/'.$album_id . '/?fields=description', $token);
+        $result = $response->getGraphNode();
+
+        return $result->getField('description');
+    }
+
+    public function getCoverPhotoFromAlbum($album_id, $limit = 100, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+
+        $response = $this->facebook->get('/'.$album_id .'/?fields=picture', $token);
+        $result = $response->getGraphNode();
+
+        $result = $result->getField('picture');
+        return $result->getField('url');
+    }
+
+    public function getPhotosFromAlbum($album_id, $limit = 100, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+
+        $response = $this->facebook->get('/'.$album_id .'/photos', $token);
+        $graphEdge = $response->getGraphEdge();
+        $results = array();
+        foreach ($graphEdge as $graphNode) {
+            $photo = array();
+            $photo['id'] = $graphNode->getField('id');
+            $photo['url'] = $this->getUrlFromPhoto($graphNode->getField('id'));
+            $photo['name'] = $this->getNameFromPhoto($graphNode->getField('id'));
+            $results[] = $photo;
+        }
+
+        return $results;
+    }
+
+    public function getUrlFromPhoto($photo_id, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+
+        $response = $this->facebook->get('/'.$photo_id . '/picture', $token);
+        $result = $response->getHeaders();
+        return $result['Location'];
+    }
+
+    public function getNameFromPhoto($photo_id, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+
+        $response = $this->facebook->get('/'.$photo_id, $token);
+        $result = $response->getGraphNode();
+        return $result->getField('name');
+    }
+
+    public function getEventsFromPage($page_id, $limit = 100, $paging = null, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+
+        if ($paging['page']) {
+            $paging = '&' . $paging['dir'] . '=' . $paging['page'];
+        } else {
+            $paging = '';
+        }
+
+        $response = $this->facebook->get('/'.$page_id.'/events?since='. strtotime('now') .'&limit=' . $limit . $paging, $token);
+        $graphEdge = $response->getGraphEdge();
+        $result = array();
+        foreach($graphEdge as $graphNode) {
+            $event = array();
+            $event['id'] = $graphNode->getField('id');
+            $event['description'] = $graphNode->getField('description');
+            $event['name'] = $graphNode->getField('name');
+            $place = $graphNode->getField('place');
+            $location = $place->getField('location');
+            $event['place'] = array(
+                'name' => $place->getField('name'),
+                'location' => array(
+                    'city' => $location->getField('city'),
+                    'country' => $location->getField('country'),
+                    'latitude' => $location->getField('latitude'),
+                    'longitude' => $location->getField('longitude'),
+                    'street' => $location->getField('street'),
+                    'zip' => $location->getField('zip')
+                )
+            );
+            $event['picture'] = $this->getCoverPhotoFromEvent($graphNode->getField('id'));
+            $start_time = $graphNode->getField('start_time');
+            $event['start_time'] = $start_time->format('d/m/Y H:i');
+            $end_time = $graphNode->getField('end_time');
+            $event['end_time'] = $end_time ? $end_time->format('d/m/Y H:i') : '';
+            $result[] = $event;
+        }
+        return $result;
+    }
+
+    public function getCoverPhotoFromEvent($event_id, $limit = 100, $token = null)
+    {
+        if ($token == null) {
+            $token = $this->session->has('fb_access_token') ? $this->session->get('fb_access_token') : $this->token;
+        }
+
+        $response = $this->facebook->get('/'.$event_id .'/?fields=cover', $token);
+        $result = $response->getGraphNode();
+
+        $result = $result->getField('cover');
+        return $result->getField('source');
+    }
+
+
 }
